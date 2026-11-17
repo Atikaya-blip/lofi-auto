@@ -1,9 +1,7 @@
 
-
 name: GTA 6 Shorts Video Renderer
 
-on:
-  workflow_dispatch:
+on: [push, workflow_dispatch]
 
 permissions:
   contents: read
