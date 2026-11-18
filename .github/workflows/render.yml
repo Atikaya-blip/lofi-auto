@@ -18,9 +18,20 @@ jobs:
       - name: Install FFmpeg
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
 
-      - name: Check renderer
+      - name: Create sample vertical Short
         run: |
-          ffmpeg -version
-          echo "GTA 6 video renderer is ready!"
+          mkdir -p output
+          ffmpeg -y \
+            -f lavfi -i "color=c=0x101827:s=1080x1920:r=30:d=12" \
+            -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='GTA 6':fontcolor=white:fontsize=110:x=(w-text_w)/2:y=650,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='THE WAIT IS ALMOST OVER':fontcolor=0xFFD700:fontsize=48:x=(w-text_w)/2:y=850" \
+            -c:v libx264 -pix_fmt yuv420p -r 30 \
+            -movflags +faststart output/gta6-sample.mp4
+
+      - name: Save rendered video
+        uses: actions/upload-artifact@v4
+        with:
+          name: gta6-sample-video
+          path: output/gta6-sample.mp4
+          retention-days: 7
