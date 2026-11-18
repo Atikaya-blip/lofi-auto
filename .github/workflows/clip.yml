@@ -13,18 +13,26 @@ on:
         description: "Permission status from the Sheet (must be APPROVED)"
         required: true
         default: "PENDING"
-      model:
-        description: "Whisper model: tiny, base or small"
+      start_seconds:
+        description: "Where the clip starts, in seconds (for example 95)"
         required: true
-        default: "base"
+        default: "0"
+      length_seconds:
+        description: "Clip length in seconds (20 to 60)"
+        required: true
+        default: "30"
+      language:
+        description: "Spoken language: auto, en or hi"
+        required: true
+        default: "auto"
 
 permissions:
   contents: read
 
 jobs:
-  transcribe:
+  clip:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
 
     steps:
       - name: Stop unless the source is APPROVED
@@ -39,7 +47,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg cmake build-essential
+          sudo apt-get install -y ffmpeg cmake build-essential fonts-noto-core
 
       - name: Download the approved source file
         env:
@@ -47,48 +55,64 @@ jobs:
         run: |
           mkdir -p work output
           curl -L --fail --retry 3 -o work/source.bin "$SOURCE_URL"
-          ls -lh work/source.bin
           if ! ffprobe -v error -show_entries format=duration -of default=nw=1 work/source.bin; then
             echo "The downloaded file is not a readable video."
-            echo "Check that the link is a direct download and the file is shared with 'Anyone with the link'."
             exit 1
           fi
 
-      - name: Extract 16 kHz mono audio
-        run: ffmpeg -y -i work/source.bin -vn -ac 1 -ar 16000 work/audio.wav
+      - name: Cut the clip
+        env:
+          START: ${{ inputs.start_seconds }}
+          LENGTH: ${{ inputs.length_seconds }}
+        run: |
+          ffmpeg -y -ss "$START" -i work/source.bin -t "$LENGTH" \
+            -c:v libx264 -preset veryfast -crf 18 -c:a aac work/clip.mp4
+
+      - name: Extract audio for captions
+        run: ffmpeg -y -i work/clip.mp4 -vn -ac 1 -ar 16000 work/audio.wav
 
       - name: Restore whisper.cpp cache
         id: cache
         uses: actions/cache@v4
         with:
           path: whisper.cpp
-          key: whisper-cpp-v1-${{ inputs.model }}
+          key: whisper-cpp-v1-base
 
       - name: Build whisper.cpp and download the model
         if: steps.cache.outputs.cache-hit != 'true'
-        env:
-          MODEL: ${{ inputs.model }}
         run: |
           git clone --depth 1 https://github.com/ggml-org/whisper.cpp
           cd whisper.cpp
-          sh ./models/download-ggml-model.sh "$MODEL"
+          sh ./models/download-ggml-model.sh base
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build -j --config Release
 
-      - name: Transcribe with word timestamps
+      - name: Make captions
         env:
-          MODEL: ${{ inputs.model }}
+          LANG_CODE: ${{ inputs.language }}
         run: |
           ./whisper.cpp/build/bin/whisper-cli \
-            -m "whisper.cpp/models/ggml-$MODEL.bin" \
+            -m whisper.cpp/models/ggml-base.bin \
             -f work/audio.wav \
-            -l auto -ml 1 -sow -oj -of output/transcript
-          ls -lh output
-          head -c 1500 output/transcript.json
+            -l "$LANG_CODE" -ml 24 -sow -osrt -of output/captions
+          cat output/captions.srt | head -n 30
 
-      - name: Save transcript
+      - name: Make vertical video with captions
+        env:
+          ROW_ID: ${{ inputs.row_id }}
+        run: |
+          STYLE="FontName=Noto Sans,Bold=1,FontSize=72,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=5,Shadow=0,Alignment=2,MarginV=520"
+          ffmpeg -y -i work/clip.mp4 -filter_complex \
+            "[0:v]split[a][b];[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=30:5[bg];[b]scale=1080:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2,subtitles=output/captions.srt:original_size=1080x1920:force_style='${STYLE}'[out]" \
+            -map "[out]" -map 0:a? \
+            -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p -r 30 \
+            -c:a aac -b:a 128k -movflags +faststart \
+            "output/short-${ROW_ID}.mp4"
+          ls -lh output
+
+      - name: Save the Short
         uses: actions/upload-artifact@v4
         with:
-          name: transcript-${{ inputs.row_id }}
-          path: output/transcript.json
+          name: short-${{ inputs.row_id }}
+          path: output/short-${{ inputs.row_id }}.mp4
           retention-days: 7
