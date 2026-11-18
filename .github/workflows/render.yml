@@ -1,7 +1,14 @@
+name: Lofi Video Renderer
 
-name: GTA 6 Shorts Video Renderer
-
-on: [push, workflow_dispatch]
+on:
+  workflow_dispatch:
+    inputs:
+      audio_file:
+        description: "Path of the licensed track in the repo"
+        default: "music/track1.mp3"
+      video_id:
+        description: "ID from your Sheet"
+        default: "TEST1"
 
 permissions:
   contents: read
@@ -9,7 +16,7 @@ permissions:
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -20,18 +27,24 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core
 
-      - name: Create sample vertical Short
+      - name: Render lofi video with Pomodoro timer
+        env:
+          AUDIO: ${{ inputs.audio_file }}
+          VID: ${{ inputs.video_id }}
         run: |
           mkdir -p output
           ffmpeg -y \
-            -f lavfi -i "color=c=0x101827:s=1080x1920:r=30:d=12" \
-            -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='GTA 6':fontcolor=white:fontsize=110:x=(w-text_w)/2:y=650,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='THE WAIT IS ALMOST OVER':fontcolor=0xFFD700:fontsize=48:x=(w-text_w)/2:y=850" \
-            -c:v libx264 -pix_fmt yuv420p -r 30 \
-            -movflags +faststart output/gta6-sample.mp4
+            -stream_loop -1 -i assets/loop.mp4 \
+            -i "$AUDIO" \
+            -vf "scale=1280:720:force_original_aspect_ratio=increase,crop=1280:720,drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='%{eif\:floor((1500-mod(t,1500))/60)\:d\:2}\:%{eif\:mod(1500-mod(t,1500),60)\:d\:2}':fontcolor=white:fontsize=96:x=(w-text_w)/2:y=(h-text_h)/2" \
+            -map 0:v -map 1:a -shortest \
+            -c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p -r 30 \
+            -c:a aac -b:a 192k \
+            -movflags +faststart "output/${VID}.mp4"
 
       - name: Save rendered video
         uses: actions/upload-artifact@v4
         with:
-          name: gta6-sample-video
-          path: output/gta6-sample.mp4
+          name: lofi-${{ inputs.video_id }}
+          path: output/${{ inputs.video_id }}.mp4
           retention-days: 7
