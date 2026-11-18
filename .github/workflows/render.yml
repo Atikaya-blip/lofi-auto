@@ -1,0 +1,55 @@
+name: Lofi Video Renderer
+
+on:
+  workflow_dispatch:
+    inputs:
+      audio_file:
+        description: "Path of the track in the repo"
+        default: "music/track1.mp3"
+      video_id:
+        description: "Name for the output video"
+        default: "TEST1"
+
+permissions:
+  contents: read
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+
+      - name: Generate animated background
+        run: |
+          mkdir -p output
+          ffmpeg -y -f lavfi \
+            -i "gradients=s=1280x720:c0=0x1b1b3a:c1=0x693668:c2=0xa74482:nb_colors=3:speed=0.02:d=60:r=30" \
+            -vf "noise=alls=10:allf=t,vignette=PI/4" \
+            -c:v libx264 -pix_fmt yuv420p output/bg.mp4
+
+      - name: Render video with timer
+        env:
+          AUDIO: ${{ inputs.audio_file }}
+          VID: ${{ inputs.video_id }}
+        run: |
+          ffmpeg -y \
+            -stream_loop -1 -i output/bg.mp4 \
+            -i "$AUDIO" \
+            -vf "drawtext=fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:text='%{eif\:floor((1500-mod(t,1500))/60)\:d\:2}\:%{eif\:mod(1500-mod(t,1500),60)\:d\:2}':fontcolor=white:fontsize=96:x=(w-text_w)/2:y=(h-text_h)/2" \
+            -map 0:v -map 1:a -shortest \
+            -c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p -r 30 \
+            -c:a aac -b:a 192k \
+            -movflags +faststart "output/${VID}.mp4"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lofi-${{ inputs.video_id }}
+          path: output/${{ inputs.video_id }}.mp4
+          retention-days: 7
